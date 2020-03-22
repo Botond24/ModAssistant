@@ -1,30 +1,17 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
-using System.Linq;
-using System.Text;
+using System.IO;
+using System.Net.Http;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Data;
-using System.Windows.Documents;
-using System.Windows.Input;
-using System.Windows.Media;
-using System.Windows.Media.Imaging;
-using System.Windows.Navigation;
-using System.Windows.Shapes;
-using System.Globalization;
-using System.IO;
 using Path = System.IO.Path;
-using System.Net;
-using System.Web.Script.Serialization;
-using System.Web;
 
 namespace ModAssistant.Pages
 {
     /// <summary>
     /// Interaction logic for Options.xaml
     /// </summary>
-    /// 
     public partial class Options : Page
     {
         public static Options Instance = new Options();
@@ -36,7 +23,6 @@ namespace ModAssistant.Pages
         public bool SelectInstalledMods { get; set; }
         public bool ModelSaberProtocolHandlerEnabled { get; set; }
         public bool BeatSaverProtocolHandlerEnabled { get; set; }
-        public bool ModSaberProtocolHandlerEnabled { get; set; }
         public string LogURL { get; private set; }
 
         public Options()
@@ -59,7 +45,6 @@ namespace ModAssistant.Pages
         {
             ModelSaberProtocolHandlerEnabled = OneClickInstaller.IsRegistered("modelsaber");
             BeatSaverProtocolHandlerEnabled = OneClickInstaller.IsRegistered("beatsaver");
-            ModSaberProtocolHandlerEnabled = OneClickInstaller.IsRegistered("modsaber");
         }
 
         private void SelectDirButton_Click(object sender, RoutedEventArgs e)
@@ -71,7 +56,7 @@ namespace ModAssistant.Pages
 
         private void OpenDirButton_Click(object sender, RoutedEventArgs e)
         {
-            System.Diagnostics.Process.Start(InstallDirectory);
+            Utils.OpenFolder(InstallDirectory);
         }
 
         private void Test_Click(object sender, RoutedEventArgs e)
@@ -100,8 +85,11 @@ namespace ModAssistant.Pages
             CheckInstalledMods = true;
             Properties.Settings.Default.Save();
             SelectInstalled.IsEnabled = true;
+
             if (MainWindow.ModsOpened)
+            {
                 Mods.Instance.PendingChanges = true;
+            }
         }
 
         private void CheckInstalled_Unchecked(object sender, RoutedEventArgs e)
@@ -111,8 +99,11 @@ namespace ModAssistant.Pages
             CheckInstalledMods = false;
             Properties.Settings.Default.Save();
             SelectInstalled.IsEnabled = false;
+
             if (MainWindow.ModsOpened)
+            {
                 Mods.Instance.PendingChanges = true;
+            }
         }
 
         public void ModelSaberProtocolHandler_Checked(object sender, RoutedEventArgs e)
@@ -155,64 +146,67 @@ namespace ModAssistant.Pages
         {
             try
             {
-                MainWindow.Instance.MainText = "Uploading Log...";
-                await Task.Run(() => UploadLog());
-                
+                MainWindow.Instance.MainText = $"{Application.Current.FindResource("Options:UploadingLog")}...";
+                await Task.Run(async () => await UploadLog());
+
                 System.Diagnostics.Process.Start(LogURL);
                 Clipboard.SetText(LogURL);
-                MainWindow.Instance.MainText = "Log URL Copied To Clipboard!";
+                MainWindow.Instance.MainText = (string)Application.Current.FindResource("Options:LogUrlCopied");
             }
             catch (Exception exception)
             {
-                MainWindow.Instance.MainText = "Uploading Log Failed.";
-                MessageBox.Show("Could not upload log file to Teknik, please try again or send the file manually.\n ================= \n" + exception, "Uploading log failed!");
-                System.Diagnostics.Process.Start(Path.Combine(InstallDirectory, "Logs"));
+                MainWindow.Instance.MainText = $"{Application.Current.FindResource("Options:LogUploadFailed")}.";
+
+                string title = (string)Application.Current.FindResource("Options:LogUploadFailed:Title");
+                string body = (string)Application.Current.FindResource("Options:LogUploadFailed:Body");
+                MessageBox.Show($"{body}\n ================= \n" + exception, title);
+                Utils.OpenFolder(Path.Combine(InstallDirectory, "Logs"));
             }
         }
 
-        private void UploadLog()
+        private async Task UploadLog()
         {
             const string DateFormat = "yyyy-mm-dd HH:mm:ss";
             DateTime now = DateTime.Now;
-            Utils.TeknikPasteResponse TeknikResponse;
 
-            string postData =
-                "title=" + "_latest.log (" + now.ToString(DateFormat) + ")" +
-                "&expireUnit=hour&expireLength=5" +
-                "&code=" + HttpUtility.UrlEncode(File.ReadAllText(Path.Combine(InstallDirectory, "Logs", "_latest.log")));
-            byte[] byteArray = Encoding.UTF8.GetBytes(postData);
-
-            HttpWebRequest request = (HttpWebRequest)WebRequest.Create(Utils.Constants.TeknikAPIUrl + "Paste");
-            request.AutomaticDecompression = DecompressionMethods.GZip;
-            request.UserAgent = "ModAssistant/" + App.Version;
-            request.Method = "POST";
-            request.ContentType = "application/x-www-form-urlencoded";
-            request.ContentLength = byteArray.Length;
-
-            Stream dataStream = request.GetRequestStream();
-            dataStream.Write(byteArray, 0, byteArray.Length);
-            dataStream.Close();
-
-            using (WebResponse response = (WebResponse)request.GetResponse())
-            using (Stream stream = response.GetResponseStream())
-            using (StreamReader reader = new StreamReader(stream))
+            var nvc = new List<KeyValuePair<string, string>>()
             {
-                var serializer = new JavaScriptSerializer();
-                TeknikResponse = serializer.Deserialize<Utils.TeknikPasteResponse>(reader.ReadToEnd());
-            }
+                new KeyValuePair<string, string>("title", $"_latest.log ({now.ToString(DateFormat)})"),
+                new KeyValuePair<string, string>("expireUnit", "hour"),
+                new KeyValuePair<string, string>("expireLength", "5"),
+                new KeyValuePair<string, string>("code", File.ReadAllText(Path.Combine(InstallDirectory, "Logs", "_latest.log"))),
+            };
+
+            var req = new HttpRequestMessage(HttpMethod.Post, Utils.Constants.TeknikAPIUrl + "Paste")
+            {
+                Content = new FormUrlEncodedContent(nvc),
+            };
+
+            var resp = await Http.HttpClient.SendAsync(req);
+            var body = await resp.Content.ReadAsStringAsync();
+
+            var TeknikResponse = Http.JsonSerializer.Deserialize<Utils.TeknikPasteResponse>(body);
             LogURL = TeknikResponse.result.url;
+        }
+
+        private void OpenAppDataButton_Click(object sender, RoutedEventArgs e)
+        {
+            string location = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                "AppData", "LocalLow", "Hyperbolic Magnetism");
+            Utils.OpenFolder(location);
         }
 
         private async void YeetBSIPAButton_Click(object sender, RoutedEventArgs e)
         {
             if (Mods.Instance.AllModsList == null)
             {
-                MainWindow.Instance.MainText = "Getting Mod List...";
-                await Task.Run(() => Mods.Instance.GetAllMods());
-                MainWindow.Instance.MainText = "Finding BSIPA Version...";
+                MainWindow.Instance.MainText = $"{Application.Current.FindResource("Options:GettingModList")}...";
+                await Task.Run(async () => await Mods.Instance.GetAllMods());
+                MainWindow.Instance.MainText = $"{Application.Current.FindResource("Options:FindingBSIPAVersion")}...";
                 await Task.Run(() => Mods.Instance.GetBSIPAVersion());
             }
-            foreach(Mod mod in Mods.InstalledMods)
+            foreach (Mod mod in Mods.InstalledMods)
             {
                 if (mod.name.ToLower() == "bsipa")
                 {
@@ -220,17 +214,23 @@ namespace ModAssistant.Pages
                     break;
                 }
             }
-            MainWindow.Instance.MainText = "BSIPA Uninstalled...";
+
+            MainWindow.Instance.MainText = $"{Application.Current.FindResource("Options:BSIPAUninstalled")}...";
         }
         private async void YeetModsButton_Click(object sender, RoutedEventArgs e)
         {
-            if (System.Windows.Forms.MessageBox.Show($"Are you sure you want to remove ALL mods?\nThis cannot be undone.", $"Uninstall All Mods?", System.Windows.Forms.MessageBoxButtons.YesNo) == System.Windows.Forms.DialogResult.Yes)
+            string title = (string)Application.Current.FindResource("Options:YeetModsBox:Title");
+            string line1 = (string)Application.Current.FindResource("Options:YeetModsBox:RemoveAllMods");
+            string line2 = (string)Application.Current.FindResource("Options:YeetModsBox:CannotBeUndone");
+
+            var resp = System.Windows.Forms.MessageBox.Show($"{line1}\n{line2}", title, System.Windows.Forms.MessageBoxButtons.YesNo);
+            if (resp == System.Windows.Forms.DialogResult.Yes)
             {
 
                 if (Mods.Instance.AllModsList == null)
                 {
-                    MainWindow.Instance.MainText = "Getting Mod List...";
-                    await Task.Run(() => Mods.Instance.CheckInstalledMods());
+                    MainWindow.Instance.MainText = $"{Application.Current.FindResource("Options: GettingModList")}...";
+                    await Task.Run(async () => await Mods.Instance.CheckInstalledMods());
                 }
                 foreach (Mod mod in Mods.InstalledMods)
                 {
@@ -242,7 +242,39 @@ namespace ModAssistant.Pages
                     Directory.Delete(Path.Combine(App.BeatSaberInstallDirectory, "Libs"), true);
                 if (Directory.Exists(Path.Combine(App.BeatSaberInstallDirectory, "IPA")))
                     Directory.Delete(Path.Combine(App.BeatSaberInstallDirectory, "IPA"), true);
-                MainWindow.Instance.MainText = "All Mods Uninstalled...";
+
+                MainWindow.Instance.MainText = $"{Application.Current.FindResource("Options:AllModsUninstalled")}...";
+            }
+        }
+
+        private void ApplicationThemeComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if ((sender as ComboBox).SelectedItem == null)
+            {
+                Themes.ApplyWindowsTheme();
+                MainWindow.Instance.MainText = (string)Application.Current.FindResource("Options:CurrentThemeRemoved");
+            }
+            else
+            {
+                Themes.ApplyTheme((sender as ComboBox).SelectedItem.ToString());
+            }
+        }
+
+        private void ApplicationThemeExportTemplate_Click(object sender, RoutedEventArgs e)
+        {
+            Themes.WriteThemeToDisk("Ugly Kulu-Ya-Ku");
+            Themes.LoadThemes();
+        }
+
+        private void ApplicationThemeOpenThemesFolder_Click(object sender, RoutedEventArgs e)
+        {
+            if (Directory.Exists(Themes.ThemeDirectory))
+            {
+                Utils.OpenFolder(Themes.ThemeDirectory);
+            }
+            else
+            {
+                MessageBox.Show((string)Application.Current.FindResource("Options:ThemeFolderNotFound"));
             }
         }
     }

@@ -1,12 +1,11 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
-using System.Configuration;
-using System.Data;
+using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
 using System.Windows;
-using ModAssistant;
 
 namespace ModAssistant
 {
@@ -24,8 +23,14 @@ namespace ModAssistant
         public static List<string> SavedMods = ModAssistant.Properties.Settings.Default.SavedMods.Split(',').ToList();
 
 
-        private void Application_Startup(object sender, StartupEventArgs e)
+        private async void Application_Startup(object sender, StartupEventArgs e)
         {
+            // Load localisation languages
+            LoadLanguage(CultureInfo.CurrentCulture.Name);
+
+            // Uncomment the next line to debug localisation
+            // LoadLanguage("en-DEBUG");
+
             if (ModAssistant.Properties.Settings.Default.UpgradeRequired)
             {
                 ModAssistant.Properties.Settings.Default.Upgrade();
@@ -36,9 +41,12 @@ namespace ModAssistant
             Version = Version.Substring(0, Version.Length - 2);
             BeatSaberInstallDirectory = Utils.GetInstallDir();
 
-            while (String.IsNullOrEmpty(App.BeatSaberInstallDirectory))
+            while (string.IsNullOrEmpty(App.BeatSaberInstallDirectory))
             {
-                if (System.Windows.Forms.MessageBox.Show($"Press OK to try again, or Cancel to close application.", $"Couldn't find your Beat Saber install folder!", System.Windows.Forms.MessageBoxButtons.OKCancel) == System.Windows.Forms.DialogResult.OK)
+                string title = (string)Current.FindResource("App:InstallDirDialog:Title");
+                string body = (string)Current.FindResource("App:InstallDirDialog:OkCancel");
+
+                if (System.Windows.Forms.MessageBox.Show(body, title, System.Windows.Forms.MessageBoxButtons.OKCancel) == System.Windows.Forms.DialogResult.OK)
                 {
                     App.BeatSaberInstallDirectory = Utils.GetManualDir();
                 }
@@ -55,26 +63,30 @@ namespace ModAssistant
 
             if (e.Args.Length == 0)
             {
-                Updater.Run();
+                await Task.Run(async () => await Updater.Run());
 
                 MainWindow window = new MainWindow();
                 window.Show();
             }
             else
             {
-                ArgumentHandler(e.Args);
+                await ArgumentHandler(e.Args);
             }
         }
 
-        private void ArgumentHandler(string[] Args)
+        private async Task ArgumentHandler(string[] args)
         {
-            switch (Args[0])
+            switch (args[0])
             {
                 case "--install":
-                    if (!String.IsNullOrEmpty(Args[1]))
-                        OneClickInstaller.InstallAsset(Args[1]);
+                    if (args.Length < 2 || string.IsNullOrEmpty(args[1]))
+                    {
+                        Utils.SendNotify(string.Format((string)Current.FindResource("App:InvalidArgument"), "--install"));
+                    }
                     else
-                        Utils.SendNotify("Invalid argument! '--install' requires an option.");
+                    {
+                        await OneClickInstaller.InstallAsset(args[1]);
+                    }
                     break;
 
                 case "--no-update":
@@ -83,31 +95,68 @@ namespace ModAssistant
                     break;
 
                 case "--register":
-                    if (!String.IsNullOrEmpty(Args[1]))
-                        OneClickInstaller.Register(Args[1], true);
+                    if (args.Length < 2 || string.IsNullOrEmpty(args[1]))
+                    {
+                        Utils.SendNotify(string.Format((string)Current.FindResource("App:InvalidArgument"), "--register"));
+                    }
                     else
-                        Utils.SendNotify("Invalid argument! '--register' requires an option.");
+                    {
+                        OneClickInstaller.Register(args[1], true);
+                    }
+
                     break;
 
                 case "--unregister":
-                    if (!String.IsNullOrEmpty(Args[1]))
-                        OneClickInstaller.Unregister(Args[1], true);
+                    if (args.Length < 2 || string.IsNullOrEmpty(args[1]))
+                    {
+                        Utils.SendNotify(string.Format((string)Current.FindResource("App:InvalidArgument"), "--unregister"));
+                    }
                     else
-                        Utils.SendNotify("Invalid argument! '--unregister' requires an option.");
+                    {
+                        OneClickInstaller.Unregister(args[1], true);
+                    }
                     break;
 
                 default:
-                    Utils.SendNotify("Unrecognized argument. Closing Mod Assistant.");
+                    Utils.SendNotify((string)Current.FindResource("App:UnrecognizedArgument"));
                     break;
             }
+
             Current.Shutdown();
         }
 
         private void Application_DispatcherUnhandledException(object sender, System.Windows.Threading.DispatcherUnhandledExceptionEventArgs e)
         {
-            MessageBox.Show("An unhandled exception just occurred: " + e.Exception, "Exception", MessageBoxButton.OK, MessageBoxImage.Warning);
+            string title = (string)Current.FindResource("App:Exception");
+            string body = (string)Current.FindResource("App:UnhandledException");
+            MessageBox.Show($"{body}: {e.Exception}", "Exception", MessageBoxButton.OK, MessageBoxImage.Warning);
+
             e.Handled = true;
             Application.Current.Shutdown();
+        }
+
+        private ResourceDictionary LanguagesDict
+        {
+            get
+            {
+                return Resources.MergedDictionaries[1];
+            }
+        }
+
+        private void LoadLanguage(string culture)
+        {
+            try
+            {
+                LanguagesDict.Source = new Uri($"Localisation/{culture}.xaml", UriKind.Relative);
+            }
+            catch (IOException)
+            {
+                if (culture.Contains("-"))
+                {
+                    LoadLanguage(culture.Split('-').First());
+                }
+                // Can't load language file
+            }
         }
     }
 }
